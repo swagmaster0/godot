@@ -117,6 +117,12 @@ class GDExtension : public Resource {
 	static HashMap<StringName, GDExtensionInterfaceFunctionPtr> gdextension_interface_functions;
 
 protected:
+#ifndef DISABLE_DEPRECATED
+	Error _open_library_bind_compat_88049(const String &p_path, const String &p_entry_symbol);
+
+	static void _bind_compatibility_methods();
+#endif
+
 	static void _bind_methods();
 
 public:
@@ -126,9 +132,7 @@ public:
 
 	static String get_extension_list_config_file();
 
-	const Ref<GDExtensionLoader> get_loader() const { return loader; }
-
-	Error open_library(const String &p_path, const Ref<GDExtensionLoader> &p_loader);
+	Error open_library(const String &p_path, const String &p_entry_symbol, const Vector<String> &p_lookup_paths = Vector<String>());
 	void close_library();
 	bool is_library_open() const;
 

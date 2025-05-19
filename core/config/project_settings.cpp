@@ -68,6 +68,10 @@ String ProjectSettings::get_resource_path() const {
 	return resource_path;
 }
 
+String ProjectSettings::get_main_pack_path() const {
+	return main_pack_path;
+}
+
 String ProjectSettings::get_imported_files_path() const {
 	return get_project_data_path().path_join("imported");
 }
@@ -500,19 +504,13 @@ bool ProjectSettings::_load_resource_pack(const String &p_pack, bool p_replace_f
 		return false;
 	}
 
-	if (project_loaded) {
-		// This pack may have declared new global classes (make sure they are picked up).
-		refresh_global_class_list();
-
-		// This pack may have defined new UIDs, make sure they are cached.
-		ResourceUID::get_singleton()->load_from_cache(false);
+	if (main_pack_path.is_empty()) {
+		main_pack_path = p_pack.get_base_dir();
 	}
 
-	// If the data pack was found, all directory access will be from here.
-	if (!using_datapack) {
-		DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
-		using_datapack = true;
-	}
+	//if data.pck is found, all directory access will be from here
+	DirAccess::make_default<DirAccessPack>(DirAccess::ACCESS_RESOURCES);
+	using_datapack = true;
 
 	return true;
 }

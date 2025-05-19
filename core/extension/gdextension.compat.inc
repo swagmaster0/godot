@@ -30,18 +30,17 @@
 
 #ifndef DISABLE_DEPRECATED
 
-Error GDExtension::_open_library_bind_compat_88418(const String &p_path, const String &p_entry_symbol) {
-	return ERR_UNAVAILABLE;
+#include "gdextension.h"
+
+Error GDExtension::_open_library_bind_compat_88049(const String &p_path, const String &p_entry_symbol) {
+	return open_library(p_path, p_entry_symbol, Vector<String>());
 }
 
 void GDExtension::_close_library_bind_compat_88418() {
 }
 
-void GDExtension::_initialize_library_bind_compat_88418(InitializationLevel p_level) {
-}
-
 void GDExtension::_bind_compatibility_methods() {
-	ClassDB::bind_compatibility_method(D_METHOD("open_library", "path", "entry_symbol"), &GDExtension::_open_library_bind_compat_88418);
+	ClassDB::bind_compatibility_method(D_METHOD("open_library", "path", "entry_symbol"), &GDExtension::_open_library_bind_compat_88049);
 	ClassDB::bind_compatibility_method(D_METHOD("close_library"), &GDExtension::_close_library_bind_compat_88418);
 	ClassDB::bind_compatibility_method(D_METHOD("initialize_library", "level"), &GDExtension::_initialize_library_bind_compat_88418);
 }
