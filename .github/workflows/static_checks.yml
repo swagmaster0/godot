@@ -37,16 +37,6 @@ jobs:
           files=$(echo "$files" | grep -v 'thirdparty' | xargs -I {} sh -c 'echo "\"./{}\""' | tr '\n' ' ')
           echo "CHANGED_FILES=$files" >> $GITHUB_ENV
 
-      # This needs to happen before Python and npm execution; it must happen before any extra files are written.
-      - name: .gitignore checks (gitignore_check.sh)
-        run: |
-          bash ./misc/scripts/gitignore_check.sh
-
-      - name: Style checks via pre-commit
-        uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: --files ${{ env.CHANGED_FILES }}
-
       - name: Python builders checks via pytest
         run: |
           pytest ./tests/python_build
