@@ -1,9 +1,9 @@
 short_name = "godot"
 name = "Godot Engine"
 major = 4
-minor = 6
+minor = 5
 patch = 0
-status = "dev"
-module_config = ""
+status = "stable"
+module_config = "godotsteam-multiplayer-peer"
 website = "https://godotengine.org"
 docs = "latest"
