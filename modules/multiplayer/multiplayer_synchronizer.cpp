@@ -177,6 +177,9 @@ Error MultiplayerSynchronizer::set_state(const List<NodePath> &p_properties, Obj
 		Object *obj = _get_prop_target(p_obj, prop);
 		ERR_FAIL_NULL_V(obj, FAILED);
 		obj->set_indexed(prop.get_subnames(), p_state[i]);
+	//	WARN_PRINT(((String)obj->get_class_name()) + ", " + (String)prop + ", " + (String)p_state[i]);
+		obj->emit_signal(SceneStringName(multiplayer_synchronizer_data_updated), prop, p_state[i]);
+
 		i += 1;
 	}
 	return OK;
@@ -395,6 +398,7 @@ Error MultiplayerSynchronizer::_watch_changes(uint64_t p_usec) {
 			w.prop = prop;
 			w.value = v.duplicate(true);
 			w.last_change_usec = p_usec;
+
 		} else if (!w.value.hash_compare(v)) {
 			w.value = v.duplicate(true);
 			w.last_change_usec = p_usec;
