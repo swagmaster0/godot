@@ -177,12 +177,11 @@ Error MultiplayerSynchronizer::set_state(const List<NodePath> &p_properties, Obj
 		Object *obj = _get_prop_target(p_obj, prop);
 		ERR_FAIL_NULL_V(obj, FAILED);
 
-		if (!obj->has_connections(SceneStringName(multiplayer_synchronizer_data_updated)))
-		{
+		if (!obj->has_connections(SceneStringName(multiplayer_synchronizer_data_updated))) {
 			// Update automatically if the signal hasn't been connected to.
 			obj->set_indexed(prop.get_subnames(), p_state[i]);
 		}
-		
+
 		obj->emit_signal(SceneStringName(multiplayer_synchronizer_data_updated), prop, p_state[i]);
 		i += 1;
 	}
