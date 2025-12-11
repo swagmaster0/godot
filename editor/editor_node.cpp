@@ -1029,8 +1029,6 @@ void EditorNode::_notification(int p_what) {
 			if (EditorSettings::get_singleton()->check_changed_settings_in_group("filesystem/file_dialog")) {
 				FileDialog::set_default_show_hidden_files(EDITOR_GET("filesystem/file_dialog/show_hidden_files"));
 				FileDialog::set_default_display_mode(EDITOR_GET("filesystem/file_dialog/display_mode"));
-				EditorFileDialog::set_default_show_hidden_files(EDITOR_GET("filesystem/file_dialog/show_hidden_files"));
-				EditorFileDialog::set_default_display_mode((EditorFileDialog::DisplayMode)EDITOR_GET("filesystem/file_dialog/display_mode").operator int());
 			}
 
 			if (EditorSettings::get_singleton()->check_changed_settings_in_group("interface/editor/tablet_driver")) {
@@ -1248,10 +1246,6 @@ void EditorNode::_resources_changed(const Vector<String> &p_resources) {
 
 void EditorNode::_fs_changed() {
 	for (FileDialog *E : file_dialogs) {
-		E->invalidate();
-	}
-
-	for (EditorFileDialog *E : editor_file_dialogs) {
 		E->invalidate();
 	}
 
@@ -1719,20 +1713,27 @@ void EditorNode::save_resource(const Ref<Resource> &p_resource) {
 }
 
 void EditorNode::save_resource_as(const Ref<Resource> &p_resource, const String &p_at_path) {
+	String resource_path = p_resource->get_path();
+	bool is_resource = resource_path.is_resource_file();
+
 	{
-		String path = p_resource->get_path();
-		if (!path.is_resource_file()) {
-			int srpos = path.find("::");
-			if (srpos != -1) {
-				String base = path.substr(0, srpos);
-				if (!get_edited_scene() || get_edited_scene()->get_scene_file_path() != base) {
+		// Early exit checks.
+
+		if (is_resource) {
+			if (FileAccess::exists(resource_path + ".import")) {
+				show_warning(TTR("This resource can't be saved because it was imported from another file. Make it unique first."));
+				return;
+			}
+		} else {
+			int separator_pos = resource_path.find("::");
+			if (separator_pos != -1) {
+				String base = resource_path.substr(0, separator_pos);
+				String base_resource_type = ResourceLoader::get_resource_type(base);
+				if (base_resource_type == "PackedScene" && (!get_edited_scene() || get_edited_scene()->get_scene_file_path() != base)) {
 					show_warning(TTR("This resource can't be saved because it does not belong to the edited scene. Make it unique first."));
 					return;
 				}
 			}
-		} else if (FileAccess::exists(path + ".import")) {
-			show_warning(TTR("This resource can't be saved because it was imported from another file. Make it unique first."));
-			return;
 		}
 	}
 
@@ -1741,7 +1742,6 @@ void EditorNode::save_resource_as(const Ref<Resource> &p_resource, const String 
 
 	current_menu_option = RESOURCE_SAVE_AS;
 	List<String> extensions;
-	Ref<PackedScene> sd = memnew(PackedScene);
 	ResourceSaver::get_recognized_extensions(p_resource, &extensions);
 	file->clear_filters();
 
@@ -1760,30 +1760,33 @@ void EditorNode::save_resource_as(const Ref<Resource> &p_resource, const String 
 		preferred.move_to_back(res_element);
 	}
 
+	String resource_name_snake_case = p_resource->get_class().to_snake_case();
+	String new_resource_name_snake_case;
+	if (!preferred.is_empty()) {
+		new_resource_name_snake_case = "new_" + resource_name_snake_case + "." + preferred.front()->get().to_lower();
+	}
+
 	if (!p_at_path.is_empty()) {
 		file->set_current_dir(p_at_path);
-		if (p_resource->get_path().is_resource_file()) {
-			file->set_current_file(p_resource->get_path().get_file());
+		if (is_resource) {
+			file->set_current_file(resource_path.get_file());
 		} else {
-			if (!preferred.is_empty()) {
-				String resource_name_snake_case = p_resource->get_class().to_snake_case();
-				file->set_current_file("new_" + resource_name_snake_case + "." + preferred.front()->get().to_lower());
-			} else {
-				file->set_current_file(String());
-			}
+			file->set_current_file(new_resource_name_snake_case);
 		}
 	} else if (!p_resource->get_path().get_base_dir().is_empty()) {
-		file->set_current_path(p_resource->get_path());
-		if (!extensions.is_empty()) {
-			const String ext = p_resource->get_path().get_extension().to_lower();
-			if (extensions.find(ext) == nullptr) {
-				file->set_current_path(p_resource->get_path().replacen("." + ext, "." + extensions.front()->get()));
+		if (is_resource) {
+			if (!extensions.is_empty()) {
+				const String ext = resource_path.get_extension().to_lower();
+				if (extensions.find(ext) == nullptr) {
+					file->set_current_path(resource_path.replacen("." + ext, "." + extensions.front()->get()));
+				}
 			}
+		} else {
+			file->set_current_file(new_resource_name_snake_case);
 		}
 	} else if (!preferred.is_empty()) {
-		const String resource_name_snake_case = p_resource->get_class().to_snake_case();
-		const String existing = "new_" + resource_name_snake_case + "." + preferred.front()->get().to_lower();
-		file->set_current_path(existing);
+		file->set_current_file(new_resource_name_snake_case);
+		file->set_current_path(new_resource_name_snake_case);
 	}
 	file->set_title(TTR("Save Resource As..."));
 	file->popup_file_dialog();
@@ -5967,14 +5970,6 @@ void EditorNode::_file_dialog_unregister(FileDialog *p_dialog) {
 	singleton->file_dialogs.erase(p_dialog);
 }
 
-void EditorNode::_editor_file_dialog_register(EditorFileDialog *p_dialog) {
-	singleton->editor_file_dialogs.insert(p_dialog);
-}
-
-void EditorNode::_editor_file_dialog_unregister(EditorFileDialog *p_dialog) {
-	singleton->editor_file_dialogs.erase(p_dialog);
-}
-
 Vector<EditorNodeInitCallback> EditorNode::_init_callbacks;
 
 void EditorNode::_begin_first_scan() {
@@ -6095,6 +6090,10 @@ void EditorNode::_load_editor_layout() {
 
 		if (overridden_default_layout >= 0) {
 			_layout_menu_option(overridden_default_layout);
+		} else {
+			ep.step(TTR("Loading docks..."), 1, true);
+			// Initialize some default values.
+			bottom_panel->load_layout_from_config(default_layout, EDITOR_NODE_CONFIG_SECTION);
 		}
 	} else {
 		ep.step(TTR("Loading docks..."), 1, true);
@@ -7535,7 +7534,7 @@ void EditorNode::_renderer_selected(int p_index) {
 	const String web_rendering_method = "gl_compatibility";
 	video_restart_dialog->connect(SceneStringName(confirmed), callable_mp(this, &EditorNode::_set_renderer_name_save_and_restart).bind(rendering_method));
 	video_restart_dialog->set_text(
-			vformat(TTR("Changing the renderer requires restarting the editor.\n\nChoosing Save & Restart will change the rendering method to:\n- Desktop platforms: %s\n- Mobile platforms: %s\n- Web platform: %s"),
+			vformat(TTR("Changing the renderer requires restarting the editor.\n\nChoosing Save & Restart will change the renderer to:\n- Desktop platforms: %s\n- Mobile platforms: %s\n- Web platform: %s"),
 					_to_rendering_method_display_name(rendering_method), _to_rendering_method_display_name(mobile_rendering_method), _to_rendering_method_display_name(web_rendering_method)));
 	video_restart_dialog->popup_centered();
 
@@ -7559,11 +7558,11 @@ void EditorNode::_set_renderer_name_save_and_restart(const String &p_rendering_m
 	ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method", p_rendering_method);
 
 	if (p_rendering_method == "mobile" || p_rendering_method == "gl_compatibility") {
-		// Also change the mobile override if changing to a compatible rendering method.
+		// Also change the mobile override if changing to a compatible renderer.
 		// This prevents visual discrepancies between desktop and mobile platforms.
 		ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method.mobile", p_rendering_method);
 	} else if (p_rendering_method == "forward_plus") {
-		// Use the equivalent mobile rendering method. This prevents the rendering method from staying
+		// Use the equivalent mobile renderer. This prevents the renderer from staying
 		// on its old choice if moving from `gl_compatibility` to `forward_plus`.
 		ProjectSettings::get_singleton()->set("rendering/renderer/rendering_method.mobile", "mobile");
 	}
@@ -7774,7 +7773,6 @@ void EditorNode::_update_main_menu_type() {
 
 #ifdef ANDROID_ENABLED
 		// Align main menu icon visually with TouchActionsPanel buttons.
-		main_menu_button->get_popup()->add_theme_constant_override("v_separation", 16 * EDSCALE);
 		menu_btn_spacer = memnew(Control);
 		menu_btn_spacer->set_custom_minimum_size(Vector2(8, 0) * EDSCALE);
 		title_bar->add_child(menu_btn_spacer);
@@ -7788,13 +7786,6 @@ void EditorNode::_update_main_menu_type() {
 		}
 		memdelete_notnull(main_menu_bar);
 		main_menu_bar = nullptr;
-
-		if (project_run_bar != nullptr) {
-			// Adjust spacers to center 2D / 3D / Script buttons.
-			int max_w = MAX(project_run_bar->get_minimum_size().x + right_menu_hb->get_minimum_size().x, main_menu_button->get_minimum_size().x);
-			left_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - main_menu_button->get_minimum_size().x), 0));
-			right_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - project_run_bar->get_minimum_size().x - right_menu_hb->get_minimum_size().x), 0));
-		}
 	} else {
 		main_menu_bar = memnew(MenuBar);
 		main_menu_bar->set_mouse_filter(Control::MOUSE_FILTER_STOP);
@@ -7825,13 +7816,6 @@ void EditorNode::_update_main_menu_type() {
 		memdelete_notnull(main_menu_button);
 		menu_btn_spacer = nullptr;
 		main_menu_button = nullptr;
-
-		if (project_run_bar != nullptr) {
-			// Adjust spacers to center 2D / 3D / Script buttons.
-			int max_w = MAX(project_run_bar->get_minimum_size().x + right_menu_hb->get_minimum_size().x, main_menu_bar->get_minimum_size().x);
-			left_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - main_menu_bar->get_minimum_size().x), 0));
-			right_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - project_run_bar->get_minimum_size().x - right_menu_hb->get_minimum_size().x), 0));
-		}
 	}
 }
 
@@ -8038,8 +8022,6 @@ EditorNode::EditorNode() {
 
 	FileDialog::set_default_show_hidden_files(EDITOR_GET("filesystem/file_dialog/show_hidden_files"));
 	FileDialog::set_default_display_mode(EDITOR_GET("filesystem/file_dialog/display_mode"));
-	EditorFileDialog::set_default_show_hidden_files(EDITOR_GET("filesystem/file_dialog/show_hidden_files"));
-	EditorFileDialog::set_default_display_mode((EditorFileDialog::DisplayMode)EDITOR_GET("filesystem/file_dialog/display_mode").operator int());
 
 	int swap_cancel_ok = EDITOR_GET("interface/editor/accept_dialog_cancel_ok_buttons");
 	if (swap_cancel_ok != 0) { // 0 is auto, set in register_scene based on DisplayServer.
@@ -8182,10 +8164,6 @@ EditorNode::EditorNode() {
 	FileDialog::register_func = _file_dialog_register;
 	FileDialog::unregister_func = _file_dialog_unregister;
 
-	EditorFileDialog::get_icon_func = _file_dialog_get_icon;
-	EditorFileDialog::register_func = _editor_file_dialog_register;
-	EditorFileDialog::unregister_func = _editor_file_dialog_unregister;
-
 	editor_export = memnew(EditorExport);
 	add_child(editor_export);
 
@@ -8251,16 +8229,15 @@ EditorNode::EditorNode() {
 	main_vbox->add_child(title_bar);
 #endif
 
-	left_l_hsplit = memnew(DockSplitContainer);
-	left_l_hsplit->set_name("DockHSplitLeftL");
-	main_vbox->add_child(left_l_hsplit);
-
-	left_l_hsplit->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	main_hsplit = memnew(DockSplitContainer);
+	main_hsplit->set_name("DockHSplitMain");
+	main_hsplit->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	main_vbox->add_child(main_hsplit);
 
 	left_l_vsplit = memnew(DockSplitContainer);
 	left_l_vsplit->set_name("DockVSplitLeftL");
 	left_l_vsplit->set_vertical(true);
-	left_l_hsplit->add_child(left_l_vsplit);
+	main_hsplit->add_child(left_l_vsplit);
 
 	TabContainer *dock_slot[DockConstants::DOCK_SLOT_MAX];
 	dock_slot[DockConstants::DOCK_SLOT_LEFT_UL] = memnew(TabContainer);
@@ -8270,13 +8247,10 @@ EditorNode::EditorNode() {
 	dock_slot[DockConstants::DOCK_SLOT_LEFT_BL]->set_name("DockSlotLeftBL");
 	left_l_vsplit->add_child(dock_slot[DockConstants::DOCK_SLOT_LEFT_BL]);
 
-	left_r_hsplit = memnew(DockSplitContainer);
-	left_r_hsplit->set_name("DockHSplitLeftR");
-	left_l_hsplit->add_child(left_r_hsplit);
 	left_r_vsplit = memnew(DockSplitContainer);
 	left_r_vsplit->set_name("DockVSplitLeftR");
 	left_r_vsplit->set_vertical(true);
-	left_r_hsplit->add_child(left_r_vsplit);
+	main_hsplit->add_child(left_r_vsplit);
 	dock_slot[DockConstants::DOCK_SLOT_LEFT_UR] = memnew(TabContainer);
 	dock_slot[DockConstants::DOCK_SLOT_LEFT_UR]->set_name("DockSlotLeftUR");
 	left_r_vsplit->add_child(dock_slot[DockConstants::DOCK_SLOT_LEFT_UR]);
@@ -8284,13 +8258,9 @@ EditorNode::EditorNode() {
 	dock_slot[DockConstants::DOCK_SLOT_LEFT_BR]->set_name("DockSlotLeftBR");
 	left_r_vsplit->add_child(dock_slot[DockConstants::DOCK_SLOT_LEFT_BR]);
 
-	main_hsplit = memnew(DockSplitContainer);
-	main_hsplit->set_name("DockHSplitMain");
-	left_r_hsplit->add_child(main_hsplit);
 	VBoxContainer *center_vb = memnew(VBoxContainer);
-	main_hsplit->add_child(center_vb);
-
 	center_vb->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	main_hsplit->add_child(center_vb);
 
 	center_split = memnew(DockSplitContainer);
 	center_split->set_name("DockVSplitCenter");
@@ -8300,14 +8270,10 @@ EditorNode::EditorNode() {
 	center_vb->add_child(center_split);
 	center_split->connect("drag_ended", callable_mp(this, &EditorNode::_bottom_panel_resized));
 
-	right_hsplit = memnew(DockSplitContainer);
-	right_hsplit->set_name("DockHSplitRight");
-	main_hsplit->add_child(right_hsplit);
-
 	right_l_vsplit = memnew(DockSplitContainer);
 	right_l_vsplit->set_name("DockVSplitRightL");
 	right_l_vsplit->set_vertical(true);
-	right_hsplit->add_child(right_l_vsplit);
+	main_hsplit->add_child(right_l_vsplit);
 	dock_slot[DockConstants::DOCK_SLOT_RIGHT_UL] = memnew(TabContainer);
 	dock_slot[DockConstants::DOCK_SLOT_RIGHT_UL]->set_name("DockSlotRightUL");
 	right_l_vsplit->add_child(dock_slot[DockConstants::DOCK_SLOT_RIGHT_UL]);
@@ -8318,7 +8284,7 @@ EditorNode::EditorNode() {
 	right_r_vsplit = memnew(DockSplitContainer);
 	right_r_vsplit->set_name("DockVSplitRightR");
 	right_r_vsplit->set_vertical(true);
-	right_hsplit->add_child(right_r_vsplit);
+	main_hsplit->add_child(right_r_vsplit);
 	dock_slot[DockConstants::DOCK_SLOT_RIGHT_UR] = memnew(TabContainer);
 	dock_slot[DockConstants::DOCK_SLOT_RIGHT_UR]->set_name("DockSlotRightUR");
 	right_r_vsplit->add_child(dock_slot[DockConstants::DOCK_SLOT_RIGHT_UR]);
@@ -8334,10 +8300,7 @@ EditorNode::EditorNode() {
 	editor_dock_manager->add_vsplit(right_l_vsplit);
 	editor_dock_manager->add_vsplit(right_r_vsplit);
 
-	editor_dock_manager->add_hsplit(left_l_hsplit);
-	editor_dock_manager->add_hsplit(left_r_hsplit);
-	editor_dock_manager->add_hsplit(main_hsplit);
-	editor_dock_manager->add_hsplit(right_hsplit);
+	editor_dock_manager->set_hsplit(main_hsplit);
 
 	for (int i = 0; i < DockConstants::DOCK_SLOT_BOTTOM; i++) {
 		editor_dock_manager->register_dock_slot((DockConstants::DockSlot)i, dock_slot[i], DockConstants::DOCK_LAYOUT_VERTICAL);
@@ -8671,6 +8634,22 @@ EditorNode::EditorNode() {
 	}
 	help_menu->add_icon_shortcut(get_editor_theme_native_menu_icon(SNAME("Heart"), global_menu, dark_mode), ED_SHORTCUT_AND_COMMAND("editor/support_development", TTRC("Support Godot Development")), HELP_SUPPORT_GODOT_DEVELOPMENT);
 
+	// Use the Ctrl modifier so F2 can be used to rename nodes in the scene tree dock.
+	ED_SHORTCUT_AND_COMMAND("editor/editor_2d", TTRC("Open 2D Workspace"), KeyModifierMask::CTRL | Key::F1);
+	ED_SHORTCUT_AND_COMMAND("editor/editor_3d", TTRC("Open 3D Workspace"), KeyModifierMask::CTRL | Key::F2);
+	ED_SHORTCUT_AND_COMMAND("editor/editor_script", TTRC("Open Script Editor"), KeyModifierMask::CTRL | Key::F3);
+	ED_SHORTCUT_AND_COMMAND("editor/editor_game", TTRC("Open Game View"), KeyModifierMask::CTRL | Key::F4);
+	ED_SHORTCUT_AND_COMMAND("editor/editor_assetlib", TTRC("Open Asset Library"), KeyModifierMask::CTRL | Key::F5);
+
+	ED_SHORTCUT_OVERRIDE("editor/editor_2d", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_1);
+	ED_SHORTCUT_OVERRIDE("editor/editor_3d", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_2);
+	ED_SHORTCUT_OVERRIDE("editor/editor_script", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_3);
+	ED_SHORTCUT_OVERRIDE("editor/editor_game", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_4);
+	ED_SHORTCUT_OVERRIDE("editor/editor_assetlib", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_5);
+
+	ED_SHORTCUT_AND_COMMAND("editor/editor_next", TTRC("Open the next Editor"));
+	ED_SHORTCUT_AND_COMMAND("editor/editor_prev", TTRC("Open the previous Editor"));
+
 	// Spacer to center 2D / 3D / Script buttons.
 	right_spacer = memnew(Control);
 	right_spacer->set_mouse_filter(Control::MOUSE_FILTER_PASS);
@@ -8695,8 +8674,8 @@ EditorNode::EditorNode() {
 	renderer->set_focus_mode(Control::FOCUS_ACCESSIBILITY);
 	renderer->set_auto_translate_mode(AUTO_TRANSLATE_MODE_DISABLED);
 	renderer->set_tooltip_auto_translate_mode(AUTO_TRANSLATE_MODE_ALWAYS);
-	renderer->set_tooltip_text(TTRC("Choose a rendering method.\n\nNotes:\n- On mobile platforms, the Mobile rendering method is used if Forward+ is selected here.\n- On the web platform, the Compatibility rendering method is always used."));
-	renderer->set_accessibility_name(TTRC("Rendering Method"));
+	renderer->set_tooltip_text(TTRC("Choose a renderer.\n\nNotes:\n- On mobile platforms, the Mobile renderer is used if Forward+ is selected here.\n- On the web platform, the Compatibility renderer is always used."));
+	renderer->set_accessibility_name(TTRC("Renderer"));
 
 	right_menu_hb->add_child(renderer);
 
@@ -8781,9 +8760,11 @@ EditorNode::EditorNode() {
 	history_dock = memnew(HistoryDock);
 	editor_dock_manager->add_dock(history_dock);
 
-	// Add some offsets to left_r and main hsplits to make LEFT_R and RIGHT_L docks wider than minsize.
-	left_r_hsplit->set_split_offset(270 * EDSCALE);
-	main_hsplit->set_split_offset(-360 * EDSCALE);
+	// Add some offsets to make LEFT_R and RIGHT_L docks wider than minsize.
+	const int dock_hsize = 280;
+	// By default there is only 3 visible, so set 2 split offsets for them.
+	const int dock_hsize_scaled = dock_hsize * EDSCALE;
+	main_hsplit->set_split_offsets({ dock_hsize_scaled, -dock_hsize_scaled });
 
 	// Define corresponding default layout.
 
@@ -8794,13 +8775,18 @@ EditorNode::EditorNode() {
 	default_layout->set_value(docks_section, "dock_4", "FileSystem,History");
 	default_layout->set_value(docks_section, "dock_5", "Inspector,Signals,Groups");
 
-	int hsplits[] = { 0, 270, -270, 0 };
-	DEV_ASSERT((int)std_size(hsplits) == editor_dock_manager->get_hsplit_count());
-	for (int i = 0; i < editor_dock_manager->get_hsplit_count(); i++) {
+	int hsplits[] = { 0, dock_hsize, -dock_hsize, 0 };
+	for (int i = 0; i < (int)std_size(hsplits); i++) {
 		default_layout->set_value(docks_section, "dock_hsplit_" + itos(i + 1), hsplits[i]);
 	}
 	for (int i = 0; i < editor_dock_manager->get_vsplit_count(); i++) {
 		default_layout->set_value(docks_section, "dock_split_" + itos(i + 1), 0);
+	}
+
+	{
+		Dictionary offsets;
+		offsets["Audio"] = -450;
+		default_layout->set_value(EDITOR_NODE_CONFIG_SECTION, "bottom_panel_offsets", offsets);
 	}
 
 	_update_layouts_menu();
@@ -8961,9 +8947,6 @@ EditorNode::EditorNode() {
 
 	gui_base->add_child(project_data_missing);
 
-	add_editor_plugin(memnew(AnimationPlayerEditorPlugin));
-	add_editor_plugin(memnew(AnimationTrackKeyEditEditorPlugin));
-	add_editor_plugin(memnew(AnimationMarkerKeyEditEditorPlugin));
 	add_editor_plugin(memnew(CanvasItemEditorPlugin));
 	add_editor_plugin(memnew(Node3DEditorPlugin));
 	add_editor_plugin(memnew(ScriptEditorPlugin));
@@ -8984,7 +8967,9 @@ EditorNode::EditorNode() {
 	}
 
 	// More visually meaningful to have this later.
-	bottom_panel->move_item_to_end(AnimationPlayerEditor::get_singleton());
+	add_editor_plugin(memnew(AnimationPlayerEditorPlugin));
+	add_editor_plugin(memnew(AnimationTrackKeyEditEditorPlugin));
+	add_editor_plugin(memnew(AnimationMarkerKeyEditEditorPlugin));
 
 	add_editor_plugin(VersionControlEditorPlugin::get_singleton());
 
@@ -9179,22 +9164,6 @@ EditorNode::EditorNode() {
 	ResourceSaver::set_save_callback(_resource_saved);
 	ResourceLoader::set_load_callback(_resource_loaded);
 
-	// Use the Ctrl modifier so F2 can be used to rename nodes in the scene tree dock.
-	ED_SHORTCUT_AND_COMMAND("editor/editor_2d", TTRC("Open 2D Editor"), KeyModifierMask::CTRL | Key::F1);
-	ED_SHORTCUT_AND_COMMAND("editor/editor_3d", TTRC("Open 3D Editor"), KeyModifierMask::CTRL | Key::F2);
-	ED_SHORTCUT_AND_COMMAND("editor/editor_script", TTRC("Open Script Editor"), KeyModifierMask::CTRL | Key::F3);
-	ED_SHORTCUT_AND_COMMAND("editor/editor_game", TTRC("Open Game View"), KeyModifierMask::CTRL | Key::F4);
-	ED_SHORTCUT_AND_COMMAND("editor/editor_assetlib", TTRC("Open Asset Library"), KeyModifierMask::CTRL | Key::F5);
-
-	ED_SHORTCUT_OVERRIDE("editor/editor_2d", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_1);
-	ED_SHORTCUT_OVERRIDE("editor/editor_3d", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_2);
-	ED_SHORTCUT_OVERRIDE("editor/editor_script", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_3);
-	ED_SHORTCUT_OVERRIDE("editor/editor_game", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_4);
-	ED_SHORTCUT_OVERRIDE("editor/editor_assetlib", "macos", KeyModifierMask::META | KeyModifierMask::CTRL | Key::KEY_5);
-
-	ED_SHORTCUT_AND_COMMAND("editor/editor_next", TTRC("Open the next Editor"));
-	ED_SHORTCUT_AND_COMMAND("editor/editor_prev", TTRC("Open the previous Editor"));
-
 	// Apply setting presets in case the editor_settings file is missing values.
 	EditorSettingsDialog::update_navigation_preset();
 
@@ -9205,16 +9174,6 @@ EditorNode::EditorNode() {
 	add_child(screenshot_timer);
 	screenshot_timer->set_owner(get_owner());
 
-	// Adjust spacers to center 2D / 3D / Script buttons.
-	if (main_menu_button != nullptr) {
-		int max_w = MAX(project_run_bar->get_minimum_size().x + right_menu_hb->get_minimum_size().x, main_menu_button->get_minimum_size().x);
-		left_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - main_menu_button->get_minimum_size().x), 0));
-		right_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - project_run_bar->get_minimum_size().x - right_menu_hb->get_minimum_size().x), 0));
-	} else {
-		int max_w = MAX(project_run_bar->get_minimum_size().x + right_menu_hb->get_minimum_size().x, main_menu_bar->get_minimum_size().x);
-		left_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - main_menu_bar->get_minimum_size().x), 0));
-		right_spacer->set_custom_minimum_size(Size2(MAX(0, max_w - project_run_bar->get_minimum_size().x - right_menu_hb->get_minimum_size().x), 0));
-	}
 	// Extend menu bar to window title.
 	if (can_expand) {
 		DisplayServer::get_singleton()->process_events();
@@ -9263,12 +9222,7 @@ EditorNode::~EditorNode() {
 	FileDialog::register_func = nullptr;
 	FileDialog::unregister_func = nullptr;
 
-	EditorFileDialog::get_icon_func = nullptr;
-	EditorFileDialog::register_func = nullptr;
-	EditorFileDialog::unregister_func = nullptr;
-
 	file_dialogs.clear();
-	editor_file_dialogs.clear();
 
 	singleton = nullptr;
 }
